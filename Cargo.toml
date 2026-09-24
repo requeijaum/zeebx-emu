@@ -171,3 +171,14 @@ opt-level = 3
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# **O `dynarmic` vendorizado.** O 0.1.3 é a última versão publicada, e ele nasce sem monitor
+# exclusivo: `A32::Config` preenche `global_monitor` com `unsafe { std::mem::zeroed() }` e um
+# `todo`, e não há setter público. Sem monitor, o emissor x64 do Dynarmic aborta o processo no
+# `ASSERT` de `EmitExclusiveReadMemory` (o campo é lido **na tradução** do bloco): qualquer bloco
+# do guest com `LDREX`/`STREX` — 40 dos 62 `.mod` do acervo — matava o emulador em vez de executar.
+# `third_party/dynarmic` é a cópia do 0.1.3 com **uma** mudança: o `Config` da A32 ganhou
+# `global_monitor(&mut ExclusiveMonitor)`; ver `third_party/LEIAME.md`. O `[patch]` é o que faz a
+# CI e qualquer dev pegarem o conserto pelo `Cargo.lock`, sem receita local de build.
+[patch.crates-io]
+dynarmic = { path = "third_party/dynarmic" }

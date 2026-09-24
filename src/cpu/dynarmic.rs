@@ -10,7 +10,7 @@ use std::mem::size_of;
 use std::rc::Rc;
 
 use dynarmic::a32::{ArchVersion, Callbacks, Dynarmic as Jit, VAddr};
-use dynarmic::{CallbackImpl, GuestInt, HaltReason};
+use dynarmic::{CallbackImpl, ExclusiveMonitor, GuestInt, HaltReason};
 
 use super::mem::GuestMemory;
 use super::{API_BASE, API_SIZE, RETURN_MAGIC};
@@ -333,6 +333,16 @@ pub struct DynarmicCpu {
     memoria: Rc<RefCell<GuestMemory>>,
     semihosting: Rc<RefCell<String>>,
     jit: Option<Box<Jit<Estado>>>,
+    /// **O monitor exclusivo do guest.** Sem ele, a tradução de qualquer bloco com `LDREX`/`STREX`
+    /// aborta o processo: o emissor x64 do Dynarmic faz `ASSERT(conf.global_monitor != nullptr)`
+    /// quando emite a leitura exclusiva, e o campo nascia nulo no invólucro do crate.
+    ///
+    /// `Box` porque o JIT guarda o **ponteiro**, não uma cópia: o monitor não pode mudar de lugar
+    /// enquanto o JIT viver. A ordem dos campos é o que garante o tempo de vida — o Rust derruba os
+    /// campos na ordem de declaração, então o `jit`, declarado antes, morre primeiro.
+    ///
+    /// Um processador: o Zeebo tem um núcleo, e o monitor é indexado por processador.
+    monitor: Box<ExclusiveMonitor>,
     /// **A tabela de páginas: o acesso à memória sem callback.** Sem ela, cada leitura e escrita
     /// do código recompilado saía do JIT para uma callback Rust, pegava o mapa por `RefCell` e
     /// procurava a região. No Need for Speed, na corrida, isso deixava o emulador em 176 milhões
@@ -352,6 +362,7 @@ impl DynarmicCpu {
             memoria: Default::default(),
             semihosting: Default::default(),
             jit: None,
+            monitor: Box::new(ExclusiveMonitor::new(1)),
             tabela: vec![std::ptr::null_mut(); PAGINAS].into_boxed_slice(),
         })
     }
@@ -498,6 +509,10 @@ impl CpuBackend for DynarmicCpu {
         let mut config = Jit::<Estado>::new_config();
         config.arch_ver(ArchVersion::V6K);
         config.code_cache_size(64 * 1024 * 1024);
+        // **O monitor exclusivo, preenchido antes de o JIT nascer.** O campo existe no invólucro do
+        // crate e chegava aqui nulo; sem ele a tradução de `LDREX`/`STREX` abortava o processo. Ver
+        // `third_party/LEIAME.md` e o teste `a_instrucao_exclusiva_nao_derruba_o_processo`.
+        config.global_monitor(&mut self.monitor);
         // Entrada = início da página no host, sem deslocamento absoluto nem bits de atributo.
         config.page_table_mask(0);
         unsafe { config.page_table(self.tabela.as_mut_ptr().cast()) };
@@ -761,19 +776,18 @@ mod tests {
     /// O emissor x64 do Dynarmic exige um `global_monitor` **no momento da tradução** de
     /// LDREX/STREX: `EmitExclusiveReadMemory` faz `ASSERT(conf.global_monitor != nullptr)` e depois
     /// o desreferencia (`emit_x64_memory.cpp.inc`). O invólucro nunca preencheu esse campo, e o
-    /// crate 0.1.3 não tem setter (`a32.rs` faz `unsafe { std::mem::zeroed() }` com um `todo`), ou
-    /// seja: o campo nasce nulo. Nada rebaixa essas instruções quando o monitor falta.
+    /// crate 0.1.3 não tinha setter (`a32.rs` faz `unsafe { std::mem::zeroed() }` com um `todo`), ou
+    /// seja: o campo nascia nulo. Nada rebaixa essas instruções quando o monitor falta.
     ///
     /// 40 dos 62 `.mod` do acervo contêm esse padrão em algum lugar. O teste monta
     /// `ldrex r0, [r1]` seguido de `b .` e executa o bloco: sem monitor, a tradução aborta e o
     /// processo morre antes de a asserção ser lida.
     ///
-    /// **Medido, e por isso ele fica ignorado em vez de verde**: em 24/09/2026 este teste matou o
-    /// processo com `assertion failed: conf.global_monitor != nullptr` e `signal: 6, SIGABRT`. O
-    /// conserto não é nosso — precisa de um patch no `dynarmic` 0.1.3 (dôr o campo
-    /// `global_monitor` ao `Config` público), e o crate não tem setter. Com o patch, tirar o
-    /// `#[ignore]` e este teste passa a ser a guarda.
-    #[ignore = "prova um defeito conhecido da dependência; ver o comentário acima"]
+    /// **Medido antes do conserto**, em 24/09/2026: este teste matava o processo com
+    /// `assertion failed: conf.global_monitor != nullptr` e `signal: 6, SIGABRT`. O 0.1.3 é a
+    /// última versão publicada do crate, então o conserto é o vendor em `third_party/dynarmic`: o
+    /// `Config` da A32 ganhou `global_monitor(&mut ExclusiveMonitor)`, e esta CPU passa o monitor em
+    /// `reset`. Ver `third_party/LEIAME.md`.
     #[test]
     fn a_instrucao_exclusiva_nao_derruba_o_processo() {
         // `ldrex r0, [r1]` (0xE1910F9F) e `b .` (0xEAFFFFFE).
