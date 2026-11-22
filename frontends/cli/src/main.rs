@@ -1867,6 +1867,16 @@ fn run_frames(
         for (avk, down) in input::controller_key_events(&pad_before, &pad) {
             machine.set_key(avk, down);
         }
+        // The rest of the face buttons, which the Z-Wheel does not need and the session does not
+        // translate: 3 as SOFT2, 4 as SEND and HOME (Enter) as SOFT1, so a game ported from a
+        // four-button pad with Start can read them as keys.
+        for (name, avk) in [("b3", 0xe037u32), ("b4", 0xe02f), ("back", 0xe036)] {
+            if let Some(index) = input::Pad::button_by_name(name) {
+                if pad.is_down(index) != pad_before.is_down(index) {
+                    machine.set_key(avk, pad.is_down(index));
+                }
+            }
+        }
         pad_before = pad;
         turns += 1;
         let outcomes = machine.advance(INSTRUCTION_BUDGET)?;
