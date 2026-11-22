@@ -1790,6 +1790,8 @@ fn run_frames(
     let mut stopped = None;
     let mut pad = input::Pad::default();
     let mut pad_before = input::Pad::default();
+    let pc_sample = std::env::var_os("ZEEBX_PC_SAMPLE").is_some();
+    let mut pc_hist: std::collections::HashMap<(u32, u32), u32> = Default::default();
     let deadline = seconds.map(|s| s.saturating_mul(1000));
     if let Some(dir) = dump_gl {
         std::fs::create_dir_all(dir)?;
@@ -1868,6 +1870,13 @@ fn run_frames(
         pad_before = pad;
         turns += 1;
         let outcomes = machine.advance(INSTRUCTION_BUDGET)?;
+        // `ZEEBX_PC_SAMPLE=1`: where the guest stopped after each pass, to find a loop that
+        // never calls the API (no trace line, no frame). The top addresses go out at the end.
+        if pc_sample && outcomes.iter().any(|o| matches!(o, Outcome::Budget)) {
+            use zeebx::cpu::{CpuBackend, Reg};
+            let cpu = machine.cpu();
+            *pc_hist.entry((cpu.read_reg(Reg::Pc), cpu.read_reg(Reg::Lr))).or_insert(0u32) += 1;
+        }
         machine.deliver_signals(INSTRUCTION_BUDGET)?;
         machine.deliver_callbacks(INSTRUCTION_BUDGET)?;
 
@@ -1924,6 +1933,13 @@ fn run_frames(
         "           {} million instructions in {turns} loop pass(es)",
         machine.instructions() / 1_000_000,
     );
+    if pc_sample {
+        let mut top: Vec<_> = pc_hist.into_iter().collect();
+        top.sort_by(|a, b| b.1.cmp(&a.1));
+        for ((pc, lr), n) in top.into_iter().take(12) {
+            println!("           pc {pc:#010x} lr {lr:#010x}: {n} pass(es)");
+        }
+    }
     if let Some((frame, outcome)) = stopped {
         print!("           stopped on pass {frame} at ");
         describe_outcome(&outcome);
