@@ -62,3 +62,15 @@ The test commands are all in [17-tests.md](17-tests.md).
 `--trace` accepts a filter (`--trace=Bitmap`), and the summary at the end counts **how many times
 each method was called** — it is what pointed out Pac-Mania's two bottlenecks and the APIs that
 were missing in nine games.
+## Profiling
+
+The guest PC can be sampled and the draws logged, both by environment variable and both documented
+in [32-profiling.md](32-profiling.md):
+
+```
+ZEEBX_PCSAMPLE=20000 ZEEBX_PCSAMPLE_OUT=profile.txt \
+  cargo run --release -p zeebx-cli -- run path/to/game.mod --seconds=80
+python3 tools/pcsample_report.py profile.txt --elf build/game.elf --base 0x10200
+
+ZEEBX_DRAWLOG=120000:3 cargo run --release -p zeebx-cli -- run path/to/game.mod --seconds=20
+```

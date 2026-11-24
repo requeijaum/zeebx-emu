@@ -1199,6 +1199,12 @@ pub struct GlState {
     /// [`GlState::set_downscale`].
     downscale: usize,
 
+    /// Diagnosis: `ZEEBX_DRAWLOG=first:howmany` prints the state of a range of draws, to find out
+    /// why a draw reaches the rasterizer and does not show up. The count that comes out is what
+    /// the vertex stage kept and what the blend/depth/alpha test will see.
+    draw_log: Option<(u64, u64)>,
+    draw_count: u64,
+
     pub(crate) matrix_mode: u32,
     pub(crate) modelview: Vec<Matrix>,
     pub(crate) projection: Vec<Matrix>,
@@ -1321,6 +1327,11 @@ impl GlState {
             color: vec![[0, 0, 0, 255]; width * height],
             depth: vec![1.0; width * height],
             stencil: vec![0; width * height],
+            draw_log: std::env::var("ZEEBX_DRAWLOG").ok().and_then(|v| {
+                let (a, b) = v.split_once(':')?;
+                Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+            }),
+            draw_count: 0,
             lighting: false,
             color_material: false,
             lights: std::array::from_fn(|i| match i {
@@ -2278,6 +2289,16 @@ impl GlState {
     pub fn draw(&mut self, mode: u32, vertices: &[Vertex]) {
         self.vertex_stage(vertices);
         let clip = std::mem::take(&mut self.transformed);
+        // The count only moves when the log is on: it exists for the bisection that finds the
+        // window of a draw that misbehaves, and a normal run should not pay for it.
+        let log_this = match self.draw_log {
+            Some((skip, count)) => {
+                self.draw_count += 1;
+                self.draw_count > skip && self.draw_count <= skip + count
+            }
+            None => false,
+        };
+        let drawn_before = self.batch.triangles.len();
         // Triangles are projected first and filled afterwards, all together: it is the whole
         // batch that decides whether splitting the frame across threads is worth it, and the
         // OpenGL state doesn't change in the middle of a draw call.
@@ -2313,6 +2334,23 @@ impl GlState {
             // Points remain unhandled: no measured game uses them.
             gles::GL_POINTS => {}
             _ => {}
+        }
+        if log_this {
+            eprintln!(
+                "[draw {}] mode={} verts={} tris={} tex={} blend={} {}+{} depth={} {} atest={} {}",
+                self.draw_count,
+                mode,
+                clip.len(),
+                batch.triangles.len() - drawn_before,
+                self.bound_texture,
+                self.blend,
+                self.blend_src,
+                self.blend_dst,
+                self.depth_test,
+                self.depth_func,
+                self.alpha_test,
+                self.alpha_func,
+            );
         }
         self.enqueue(&mut batch);
         self.batch = batch;

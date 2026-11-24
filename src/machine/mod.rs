@@ -3628,12 +3628,23 @@ impl<C: CpuBackend> Machine<C> {
         self.budget = budget;
         loop {
             let spent = self.cpu.instructions().saturating_sub(begin);
-            let slice = cap.saturating_sub(spent).min(budget);
-            if slice == 0 {
+            let real_slice = cap.saturating_sub(spent).min(budget);
+            if real_slice == 0 {
                 self.note_interrupted_segment(pc);
                 return Ok(Outcome::Budget);
             }
+            // PC sampling for profiling (ZEEBX_PCSAMPLE=instructions, ZEEBX_PCSAMPLE_OUT=file)
+            let sampling = pc_sample_every();
+            let slice = sampling.map_or(real_slice, |n| real_slice.min(n));
             match self.cpu.run(pc, slice)? {
+                StopReason::Budget if sampling.is_some() && slice < real_slice => {
+                    let stopped = self.cpu.read_reg(Reg::Pc) & !1;
+                    let mode = u32::from(self.cpu.in_thumb());
+                    let sp = self.cpu.read_reg(Reg::Sp);
+                    let saved = self.cpu.read_u32(sp.wrapping_add(16)).unwrap_or(0);
+                    pc_sample_record(stopped, self.cpu.read_reg(Reg::Lr), saved);
+                    pc = stopped | mode;
+                }
                 StopReason::ApiCall { addr }
                     if self.calls_total - calls_at_start >= MAX_CALLS =>
                 {
@@ -4455,3 +4466,29 @@ impl<C: CpuBackend> Machine<C> {
 
 #[cfg(test)]
 mod tests;
+
+/// PC sampling for profiling: `ZEEBX_PCSAMPLE=N` stops the guest every N instructions and counts
+/// the PC; `ZEEBX_PCSAMPLE_OUT=file` receives `pc count` lines (rewritten every 2000 samples).
+fn pc_sample_every() -> Option<u64> {
+    static EVERY: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *EVERY.get_or_init(|| std::env::var("ZEEBX_PCSAMPLE").ok().and_then(|v| v.parse().ok()))
+}
+
+fn pc_sample_record(pc: u32, lr: u32, saved: u32) {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static HIST: Mutex<Option<(HashMap<(u32, u32, u32), u64>, u64)>> = Mutex::new(None);
+    let mut guard = HIST.lock().unwrap();
+    let (hist, total) = guard.get_or_insert_with(|| (HashMap::new(), 0));
+    *hist.entry((pc, lr & !1, saved & !1)).or_insert(0) += 1;
+    *total += 1;
+    if *total % 2000 == 0 {
+        if let Ok(path) = std::env::var("ZEEBX_PCSAMPLE_OUT") {
+            let mut out = String::new();
+            for ((pc, lr, sv), n) in hist.iter() {
+                out.push_str(&format!("{pc:08x} {lr:08x} {sv:08x} {n}\n"));
+            }
+            let _ = std::fs::write(path, out);
+        }
+    }
+}

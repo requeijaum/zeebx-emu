@@ -63,3 +63,15 @@ Os comandos de teste estão todos em [17-testes.md](17-testes.md).
 O `--trace` aceita filtro (`--trace=Bitmap`), e o resumo do fim conta **quantas vezes cada método
 foi chamado** — foi ele que apontou os dois gargalos do Pac-Mania e as APIs que faltavam em nove
 jogos.
+## Perfilamento
+
+O PC do guest pode ser amostrado e os draws registrados, os dois por variável de ambiente e os dois
+documentados em [32-perfilamento.md](32-perfilamento.md):
+
+```
+ZEEBX_PCSAMPLE=20000 ZEEBX_PCSAMPLE_OUT=perfil.txt \
+  cargo run --release -p zeebx-cli -- run caminho/para/jogo.mod --seconds=80
+python3 tools/pcsample_report.py perfil.txt --elf build/jogo.elf --base 0x10200
+
+ZEEBX_DRAWLOG=120000:3 cargo run --release -p zeebx-cli -- run caminho/para/jogo.mod --seconds=20
+```
