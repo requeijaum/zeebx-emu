@@ -113,6 +113,12 @@ fn main() -> ExitCode {
                 .iter()
                 .find_map(|a| a.strip_prefix("--dump-audio="))
                 .map(str::to_owned);
+            // A `.zbxstate` from the interface: the run starts at the instant it kept instead of
+            // at the boot, which is what a bug at a specific point needs.
+            let state = args
+                .iter()
+                .find_map(|a| a.strip_prefix("--state="))
+                .map(std::path::PathBuf::from);
             let window = args.iter().any(|a| a == "--window");
             let keys = args
                 .iter()
@@ -149,6 +155,7 @@ fn main() -> ExitCode {
                     keys,
                     dump_gl,
                     dump_audio,
+                    state,
                     network: !args.iter().any(|a| a == "--no-network"),
                     network_to: args
                         .iter()
@@ -408,6 +415,13 @@ fn main() -> ExitCode {
                 })
                 .unwrap_or_default();
             let gpu = args.iter().any(|a| a == "--gpu");
+            // A `.zbxstate` of the interface: the session starts at the instant it kept. The
+            // map the GUI mounts for the module is the one the state was written against, which
+            // is why this lives in `session` and not in `run`.
+            let state = args
+                .iter()
+                .find_map(|a| a.strip_prefix("--state="))
+                .map(std::path::PathBuf::from);
             let serial = args.iter().find_map(|a| a.strip_prefix("--serial="));
             // As in `run`: the filter alone turns nothing on, and turning it on without a filter
             // shows everything. Before, this branch did not even read the option, and the
@@ -491,7 +505,7 @@ fn main() -> ExitCode {
             };
             report(windowless_session(
                 &args[1], seconds, dump, &keys, &shots, gpu, serial, z_wheel, scale, enhancements,
-                profile, boomerang, ports, tracing, trace_filter,
+                profile, boomerang, ports, tracing, trace_filter, state,
             ))
         }
         _ => {
@@ -595,6 +609,8 @@ struct Options {
     keys: input::Script,
     dump_gl: Option<String>,
     dump_audio: Option<String>,
+    /// Where to read a `.zbxstate` from, with `--state=FILE`.
+    state: Option<std::path::PathBuf>,
     /// Whether the game may talk to the network. On by default; `--no-network` turns it off.
     network: bool,
     /// Where to redirect connections, with `--server=HOST[:PORT]`.
@@ -697,6 +713,7 @@ fn run(path: &str, options: Options) -> Result<(), Box<dyn std::error::Error>> {
         keys,
         dump_gl,
         dump_audio,
+        state,
         network,
         network_to,
         bridge,
@@ -752,6 +769,15 @@ fn run(path: &str, options: Options) -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_default();
     let mut machine = Machine::new(DefaultBackend::new()?, module, root);
     println!("files:     {}", machine.file_root().display());
+    if let Some(state) = &state {
+        // The state carries the console clock too, so the limiter compares the restored instant
+        // with a timeline that starts there (Session::restore_state does the same).
+        let bytes = std::fs::read(state)?;
+        machine
+            .restore_state(&bytes)
+            .map_err(|err| format!("{}: {err}", state.display()))?;
+        println!("state:     {}", state.display());
+    }
     machine.set_tracing(tracing);
     machine.set_trace_filter(trace_filter);
     if !probe.is_empty() {
@@ -1330,6 +1356,7 @@ fn windowless_session(
     requested_ports: Option<[Option<bindings::Device>; input::PORTS]>,
     tracing: bool,
     trace_filter: Option<String>,
+    state: Option<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let serial = serial.map(std::path::Path::new);
     let settings = ui::settings::Settings::load();
@@ -1357,6 +1384,13 @@ fn windowless_session(
         z_wheel,
     )
     .map_err(|err| format!("{err:?}"))?;
+    if let Some(state) = &state {
+        let bytes = std::fs::read(state)?;
+        session
+            .restore_state(&bytes)
+            .map_err(|err| format!("{}: {err}", state.display()))?;
+        println!("state:     {}", state.display());
+    }
     session.set_internal_resolution(scale);
     session.set_aspect_ratio(aspect_ratio_from_cli());
     session.set_enhancements(enhancements.0, enhancements.1);
