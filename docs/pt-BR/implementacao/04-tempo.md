@@ -135,3 +135,10 @@ mesmo freio a 3x, e o limite desligado é sem freio. Trocar de proporção reanc
 sem isso, soltar o fast-forward deixava o jogo "adiantado" por tudo o que ele ganhou. O save state
 grava também o `clock_us`, o tempo pulado, que antes ficava de fora e fazia o relógio restaurado
 nascer no "agora". Ver [24-velocidade.md](24-velocidade.md).
+
+O `zeebx run` imprime o par no fim — `N timer firing(s) in X virtual ms` e
+`Y virtual ms in Z real s (W% of real time)` — porque as duas respostas são perguntas diferentes.
+Com janela o laço dorme para mantê-las juntas e o `W` lê ~100%; sem janela o objetivo é terminar
+rápido, e o relógio virtual (que também anda com as instruções executadas) pode deixar o real muito
+atrás. Um jogo "em câmera lenta" e um "rápido demais" se distinguem por essa razão, não pela
+contagem de timers.

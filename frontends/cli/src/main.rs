@@ -1907,10 +1907,22 @@ fn run_frames(
             recorded.len() as f32 / (RECORD_RATE * 2) as f32
         );
     }
+    // The virtual clock is the one the game sees; without a window nothing holds it to the
+    // world's pace (`skip_idle_time` jumps ahead and the clock also moves with the instructions
+    // executed), so the real time is what says how far from 1:1 the run went. With the window
+    // open the loop sleeps to keep the two together, and this prints close to 100%.
+    let real = started.elapsed();
+    let virtual_run = u64::from(machine.clock_ms()).saturating_sub(clock_base);
     println!(
         "time:      {drawn} timer firing(s) in {} virtual ms, {} timer(s) armed",
         machine.clock_ms(),
         machine.armed_timers()
+    );
+    println!(
+        "           {virtual_run} virtual ms in {:.3} real s ({:.1}% of real time, {:.1} MIPS)",
+        real.as_secs_f64(),
+        100.0 * virtual_run as f64 / (real.as_millis().max(1)) as f64,
+        machine.instructions() as f64 / real.as_secs_f64().max(f64::MIN_POSITIVE) / 1_000_000.0
     );
     println!(
         "           {} million instructions in {turns} loop pass(es)",

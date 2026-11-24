@@ -131,3 +131,10 @@ the same brake at 3x, and the limit turned off is no brake at all. Changing the 
 the comparison — without that, releasing fast-forward left the game "ahead" by everything it had
 gained. The save state also records `clock_us`, the skipped time, which used to be left out and
 made the restored clock start at "now". See [24-speed.md](24-speed.md).
+
+`zeebx run` prints the pair at the end — `N timer firing(s) in X virtual ms` and
+`Y virtual ms in Z real s (W% of real time)` — because the two answers are different questions.
+With a window the loop sleeps to keep them together and `W` reads ~100%; without one the point is
+to finish fast, and the virtual clock (which also moves with the instructions executed) can leave
+the real clock far behind. A game that "runs in slow motion" and a game that "runs too fast" are
+told apart by that ratio, not by the timer count.
